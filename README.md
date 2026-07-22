@@ -1,2 +1,1 @@
 # ShinningTrapezohedron
-# ShinningTrapezohedron
