@@ -14,13 +14,10 @@ use super::{
     model::{DeviceStatus, LoadAvg, MemoryStatus, SystemStatus},
 };
 
-/// 系统状态采样间隔；积压的采样会被跳过，不会在恢复后集中执行。
-const STATUS_SAMPLE_INTERVAL: Duration = Duration::from_secs(2);
-
-/// 启动独立采集任务；返回的句柄用于随主服务生命周期保留任务。
-pub fn spawn_collector(publisher: StatusPublisher) -> JoinHandle<()> {
+/// 按配置的时间间隔启动采集任务；返回句柄用于随主服务生命周期保留任务。
+pub fn spawn_collector(publisher: StatusPublisher, sample_interval: Duration) -> JoinHandle<()> {
     tokio::spawn(async move {
-        let mut interval = time::interval(STATUS_SAMPLE_INTERVAL);
+        let mut interval = time::interval(sample_interval);
         interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
         loop {
@@ -95,7 +92,7 @@ mod tests {
     #[tokio::test]
     async fn collector_publishes_linux_snapshot() {
         let (publisher, mut subscriber) = channel(DeviceStatus::default());
-        let task = spawn_collector(publisher);
+        let task = spawn_collector(publisher, Duration::from_millis(10));
 
         timeout(Duration::from_secs(5), subscriber.changed())
             .await

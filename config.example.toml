@@ -1,0 +1,9 @@
+[web]
+listen_address = "0.0.0.0:3000"
+
+[status]
+sample_interval_seconds = 2
+
+[logging]
+filter = "info"
+ansi = false

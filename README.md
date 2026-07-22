@@ -32,10 +32,11 @@ cargo build --release --target riscv64gc-unknown-linux-musl
 
 ## 运行
 
-默认监听 `0.0.0.0:3000`，可以通过环境变量覆盖：
+先复制并编辑配置文件，所有运行参数都从该文件读取：
 
 ```bash
-SHINNING_LISTEN_ADDR=127.0.0.1:3000 cargo run
+cp config.example.toml config.toml
+cargo run -- config.toml
 ```
 
 - `GET /api/health` 返回进程健康状态。
@@ -43,4 +44,4 @@ SHINNING_LISTEN_ADDR=127.0.0.1:3000 cargo run
 - 未匹配的页面路径返回嵌入的前端入口。
 - 未匹配的 `/api/*` 路径始终返回 JSON 404，不会落入前端页面。
 
-状态通过 `tokio::sync::watch` 发布。Linux 采集器每两秒读取一次 `/proc`，成功后整体替换快照；采集失败时继续保留上一次完整状态。
+状态通过 `tokio::sync::watch` 发布。Linux 采集器按配置文件中的间隔读取 `/proc`，成功后整体替换快照；采集失败时继续保留上一次完整状态。
