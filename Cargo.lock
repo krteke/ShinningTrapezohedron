@@ -377,6 +377,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "hex"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
+
+[[package]]
 name = "http"
 version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -528,6 +534,12 @@ dependencies = [
  "nix 0.27.1",
  "serialport",
 ]
+
+[[package]]
+name = "linux-raw-sys"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
 
 [[package]]
 name = "log"
@@ -744,6 +756,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "procfs"
+version = "0.18.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "25485360a54d6861439d60facef26de713b1e126bf015ec8f98239467a2b82f7"
+dependencies = [
+ "bitflags 2.13.1",
+ "procfs-core",
+ "rustix",
+]
+
+[[package]]
+name = "procfs-core"
+version = "0.18.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e6401bf7b6af22f78b563665d15a22e9aef27775b79b149a66ca022468a4e405"
+dependencies = [
+ "bitflags 2.13.1",
+ "hex",
+]
+
+[[package]]
 name = "quote"
 version = "1.0.47"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -833,6 +866,19 @@ dependencies = [
  "mime_guess",
  "sha2",
  "walkdir",
+]
+
+[[package]]
+name = "rustix"
+version = "1.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b6fe4565b9518b83ef4f91bb47ce29620ca828bd32cb7e408f0062e9930ba190"
+dependencies = [
+ "bitflags 2.13.1",
+ "errno",
+ "libc",
+ "linux-raw-sys",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -961,6 +1007,7 @@ dependencies = [
  "embedded-graphics",
  "embedded-hal",
  "linux-embedded-hal",
+ "procfs",
  "rtnetlink",
  "rust-embed",
  "serde",

@@ -17,7 +17,9 @@ async fn main() -> Result<()> {
     let listener = TcpListener::bind(&address)
         .await
         .with_context(|| format!("无法监听地址 {address}"))?;
-    let (_status_publisher, status_subscriber) = status::channel(Default::default());
+    let (status_publisher, status_subscriber) =
+        status::channel(status::model::DeviceStatus::default());
+    let _status_collector = status::linux::spawn_collector(status_publisher);
 
     info!(%address, "Web 服务已启动");
     axum::serve(listener, web::router(status_subscriber))
@@ -29,7 +31,6 @@ async fn main() -> Result<()> {
 fn init_tracing() -> Result<()> {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     tracing_subscriber::fmt()
-        .with_ansi(true)
         .with_env_filter(filter)
         .try_init()
         .map_err(|error| anyhow::anyhow!("初始化日志系统失败: {error}"))

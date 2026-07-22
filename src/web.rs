@@ -12,7 +12,7 @@ use rust_embed::{Embed, EmbeddedFile};
 use serde::Serialize;
 use tower_http::trace::TraceLayer;
 
-use crate::status::{DeviceStatus, StatusSubscriber};
+use crate::status::{StatusSubscriber, model::DeviceStatus};
 
 #[derive(Embed)]
 #[folder = "$CARGO_MANIFEST_DIR/frontend/build/"]
@@ -116,7 +116,7 @@ mod tests {
     use tower::ServiceExt;
 
     use super::router;
-    use crate::status::{DeviceStatus, channel};
+    use crate::status::{channel, model::DeviceStatus};
 
     fn test_router() -> axum::Router {
         let (_, subscriber) = channel(DeviceStatus::default());
@@ -147,6 +147,7 @@ mod tests {
         let snapshot = DeviceStatus {
             revision: 7,
             collected_at_unix_ms: Some(1234),
+            system: None,
         };
         let (_, subscriber) = channel(snapshot);
         let response = router(subscriber)
@@ -162,7 +163,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(
             json_body(response).await,
-            json!({ "revision": 7, "collectedAtUnixMs": 1234 })
+            json!({ "revision": 7, "collectedAtUnixMs": 1234, "system": null })
         );
     }
 
