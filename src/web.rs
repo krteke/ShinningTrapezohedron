@@ -3,6 +3,7 @@ use std::borrow::Cow;
 use axum::{
     Json, Router,
     body::Body,
+    extract::State,
     http::{StatusCode, Uri, header},
     response::{IntoResponse, Response},
     routing::get,
@@ -10,6 +11,8 @@ use axum::{
 use rust_embed::{Embed, EmbeddedFile};
 use serde::Serialize;
 use tower_http::trace::TraceLayer;
+
+use crate::status::{DeviceStatus, StatusSubscriber};
 
 #[derive(Embed)]
 #[folder = "$CARGO_MANIFEST_DIR/frontend/build/"]
@@ -26,19 +29,30 @@ struct ApiErrorBody {
     message: &'static str,
 }
 
-pub(crate) fn router() -> Router {
+#[derive(Clone)]
+struct AppState {
+    status: StatusSubscriber,
+}
+
+pub fn router(status: StatusSubscriber) -> Router {
     let api = Router::new()
         .route("/health", get(health))
+        .route("/status", get(device_status))
         .fallback(api_not_found);
 
     Router::new()
         .nest("/api", api)
         .fallback_service(get(frontend))
         .layer(TraceLayer::new_for_http())
+        .with_state(AppState { status })
 }
 
 async fn health() -> Json<HealthBody> {
     Json(HealthBody { status: "ok" })
+}
+
+async fn device_status(State(state): State<AppState>) -> Json<DeviceStatus> {
+    Json(state.status.borrow().clone())
 }
 
 async fn api_not_found() -> impl IntoResponse {
@@ -102,9 +116,15 @@ mod tests {
     use tower::ServiceExt;
 
     use super::router;
+    use crate::status::{DeviceStatus, channel};
+
+    fn test_router() -> axum::Router {
+        let (_, subscriber) = channel(DeviceStatus::default());
+        router(subscriber)
+    }
 
     async fn request(uri: &str) -> Response {
-        router()
+        test_router()
             .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
             .await
             .unwrap()
@@ -120,6 +140,30 @@ mod tests {
         let response = request("/api/health").await;
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(json_body(response).await, json!({ "status": "ok" }));
+    }
+
+    #[tokio::test]
+    async fn status_returns_current_snapshot() {
+        let snapshot = DeviceStatus {
+            revision: 7,
+            collected_at_unix_ms: Some(1234),
+        };
+        let (_, subscriber) = channel(snapshot);
+        let response = router(subscriber)
+            .oneshot(
+                Request::builder()
+                    .uri("/api/status")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            json_body(response).await,
+            json!({ "revision": 7, "collectedAtUnixMs": 1234 })
+        );
     }
 
     #[tokio::test]

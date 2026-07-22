@@ -1,3 +1,4 @@
+mod status;
 mod web;
 
 use anyhow::{Context, Result};
@@ -16,9 +17,10 @@ async fn main() -> Result<()> {
     let listener = TcpListener::bind(&address)
         .await
         .with_context(|| format!("无法监听地址 {address}"))?;
+    let (_status_publisher, status_subscriber) = status::channel(Default::default());
 
     info!(%address, "Web 服务已启动");
-    axum::serve(listener, web::router())
+    axum::serve(listener, web::router(status_subscriber))
         .with_graceful_shutdown(shutdown_signal())
         .await
         .context("Web 服务异常退出")

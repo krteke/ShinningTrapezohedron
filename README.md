@@ -25,5 +25,8 @@ SHINNING_LISTEN_ADDR=127.0.0.1:3000 cargo run
 ```
 
 - `GET /api/health` 返回进程健康状态。
+- `GET /api/status` 返回状态采集器发布的最新不可变快照。
 - 未匹配的页面路径返回嵌入的前端入口。
 - 未匹配的 `/api/*` 路径始终返回 JSON 404，不会落入前端页面。
+
+状态通过 `tokio::sync::watch` 发布。
