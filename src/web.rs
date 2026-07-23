@@ -44,6 +44,14 @@ async fn frontend(uri: Uri) -> Response {
         return asset_response(path, file);
     }
 
+    // SvelteKit 的静态适配器会把 /settings/status 生成为 settings/status.html。
+    let page_path = format!("{}.html", path.trim_end_matches('/'));
+    if !path.contains('.')
+        && let Some(file) = FrontendAssets::get(&page_path)
+    {
+        return asset_response(&page_path, file);
+    }
+
     if !path.starts_with("_app/")
         && !path.contains('.')
         && let Some(index) = FrontendAssets::get("index.html")
@@ -55,7 +63,7 @@ async fn frontend(uri: Uri) -> Response {
 }
 
 fn asset_response(path: &str, file: EmbeddedFile) -> Response {
-    let cache_control = if path == "index.html" {
+    let cache_control = if path.ends_with(".html") {
         "no-cache"
     } else if path.starts_with("_app/immutable/") {
         "public, max-age=31536000, immutable"
@@ -255,7 +263,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn spa_path_returns_index() {
+    async fn prerendered_path_returns_matching_html() {
+        let response = request("/settings/status").await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-cache");
+        let body = to_bytes(response.into_body(), 256 * 1024).await.unwrap();
+        assert!(String::from_utf8_lossy(&body).contains("<title>状态采样</title>"));
+    }
+
+    #[tokio::test]
+    async fn unknown_spa_path_returns_index() {
         let response = request("/network/settings").await;
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(response.headers()[header::CACHE_CONTROL], "no-cache");
