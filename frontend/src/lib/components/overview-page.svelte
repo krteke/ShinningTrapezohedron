@@ -8,16 +8,20 @@
 		IconServer
 	} from '@tabler/icons-svelte';
 
-	import { loadStatus, type DeviceStatus } from '$lib/api/status';
+	import { loadStatus, subscribeStatus, type DeviceStatus } from '$lib/api/status';
 	import * as Alert from '$lib/components/ui/alert';
 	import { Button } from '$lib/components/ui/button';
 	import * as Card from '$lib/components/ui/card';
 	import { Skeleton } from '$lib/components/ui/skeleton';
+	import { Spinner } from '$lib/components/ui/spinner';
 
 	let status = $state<DeviceStatus | null>(null);
 	let loading = $state(true);
-	let error = $state<string | null>(null);
+	let refreshing = $state(false);
+	let streamError = $state<string | null>(null);
+	let requestError = $state<string | null>(null);
 
+	const error = $derived(requestError ?? streamError);
 	const memoryPercent = $derived.by(() => {
 		const memory = status?.system?.memory;
 		if (!memory || memory.totalBytes === 0) return 0;
@@ -25,21 +29,34 @@
 	});
 
 	onMount(() => {
-		const controller = new AbortController();
-		void refresh(controller.signal);
-		return () => controller.abort();
+		return subscribeStatus({
+			onStatus: (snapshot) => {
+				status = snapshot;
+				loading = false;
+				streamError = null;
+				requestError = null;
+			},
+			onOpen: () => {
+				streamError = null;
+			},
+			onError: (message) => {
+				loading = false;
+				streamError = message;
+			}
+		});
 	});
 
-	async function refresh(signal?: AbortSignal) {
-		loading = true;
-		error = null;
+	async function refresh() {
+		if (status === null) loading = true;
+		refreshing = true;
+		requestError = null;
 		try {
-			status = await loadStatus(signal);
+			status = await loadStatus();
 		} catch (cause) {
-			if (cause instanceof DOMException && cause.name === 'AbortError') return;
-			error = cause instanceof Error ? cause.message : '无法读取设备状态';
+			requestError = cause instanceof Error ? cause.message : '无法读取设备状态';
 		} finally {
-			if (!signal?.aborted) loading = false;
+			loading = false;
+			refreshing = false;
 		}
 	}
 
@@ -88,8 +105,12 @@
 				更新于 {formatCollectedAt(status.collectedAtUnixMs)}
 			</span>
 		{/if}
-		<Button variant="outline" size="sm" disabled={loading} onclick={() => void refresh()}>
-			<IconRefresh data-icon="inline-start" />
+		<Button variant="outline" size="sm" disabled={refreshing} onclick={() => void refresh()}>
+			{#if refreshing}
+				<Spinner data-icon="inline-start" aria-label="正在刷新" />
+			{:else}
+				<IconRefresh data-icon="inline-start" />
+			{/if}
 			刷新
 		</Button>
 	</div>
@@ -118,7 +139,7 @@
 			<Card.Root>
 				<Card.Header>
 					<Card.Title>运行时间</Card.Title>
-					<Card.Action class="text-muted-foreground"><IconClock class="size-4" /></Card.Action>
+					<Card.Action class="text-muted-foreground"><IconClock /></Card.Action>
 				</Card.Header>
 				<Card.Content class="flex flex-col gap-1.5">
 					<p class="text-2xl font-medium tabular-nums">
@@ -134,7 +155,7 @@
 			<Card.Root>
 				<Card.Header>
 					<Card.Title>内存</Card.Title>
-					<Card.Action class="text-muted-foreground"><IconServer class="size-4" /></Card.Action>
+					<Card.Action class="text-muted-foreground"><IconServer /></Card.Action>
 				</Card.Header>
 				<Card.Content class="flex flex-col gap-1.5">
 					<p class="text-2xl font-medium tabular-nums">{memoryPercent}%</p>
@@ -149,7 +170,7 @@
 			<Card.Root>
 				<Card.Header>
 					<Card.Title>系统负载</Card.Title>
-					<Card.Action class="text-muted-foreground"><IconCpu class="size-4" /></Card.Action>
+					<Card.Action class="text-muted-foreground"><IconCpu /></Card.Action>
 				</Card.Header>
 				<Card.Content>
 					<div class="grid grid-cols-3 gap-3">
@@ -175,7 +196,7 @@
 				</Card.Content>
 			</Card.Root>
 		</div>
-	{:else}
+	{:else if !error}
 		<Alert.Root>
 			<Alert.Title>状态尚未采集</Alert.Title>
 		</Alert.Root>

@@ -105,6 +105,7 @@ pub(super) fn router() -> Router<AppState> {
     Router::new()
         .route("/health", get(health))
         .route("/status", get(device_status))
+        .route("/status/events", get(super::status_stream::device_status))
         .route("/config", get(get_config).put(replace_config))
         .fallback(api_not_found)
         .method_not_allowed_fallback(method_not_allowed)

@@ -1,4 +1,5 @@
 mod api;
+mod status_stream;
 
 use std::borrow::Cow;
 
@@ -89,7 +90,9 @@ mod tests {
         response::Response,
     };
     use serde_json::{Value, json};
+    use std::time::Duration;
     use tempfile::{TempDir, tempdir};
+    use tokio_stream::StreamExt;
     use tower::ServiceExt;
 
     use super::router;
@@ -160,6 +163,52 @@ mod tests {
             json_body(response).await,
             json!({ "revision": 7, "collectedAtUnixMs": 1234, "system": null })
         );
+    }
+
+    #[tokio::test]
+    async fn status_stream_publishes_current_and_new_snapshots() {
+        let directory = tempdir().unwrap();
+        let config = manager::spawn(directory.path().join("config.toml"), test_config(2));
+        let initial = DeviceStatus {
+            revision: 7,
+            collected_at_unix_ms: Some(1234),
+            system: None,
+        };
+        let (publisher, subscriber) = channel(initial);
+        let response = router(subscriber, config)
+            .oneshot(
+                Request::builder()
+                    .uri("/api/status/events")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()[header::CONTENT_TYPE],
+            "text/event-stream"
+        );
+
+        let mut body = response.into_body().into_data_stream();
+        let first = body.next().await.unwrap().unwrap();
+        assert!(String::from_utf8_lossy(&first).contains("\"revision\":7"));
+
+        publisher.send_replace(DeviceStatus {
+            revision: 8,
+            collected_at_unix_ms: Some(5678),
+            system: None,
+        });
+        let second = tokio::time::timeout(Duration::from_secs(1), body.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let event = String::from_utf8_lossy(&second);
+        assert!(event.contains("event: status"));
+        assert!(event.contains("id: 8"));
+        assert!(event.contains("\"revision\":8"));
     }
 
     #[tokio::test]

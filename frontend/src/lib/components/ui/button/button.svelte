@@ -56,6 +56,8 @@
 </script>
 
 {#if href}
+	<!-- 按钮链接还需兼容外部地址，不能统一调用 SvelteKit 的 resolve。 -->
+	<!-- eslint-disable svelte/no-navigation-without-resolve -->
 	<a
 		bind:this={ref}
 		data-slot="button"
@@ -68,6 +70,7 @@
 	>
 		{@render children?.()}
 	</a>
+	<!-- eslint-enable svelte/no-navigation-without-resolve -->
 {:else}
 	<button
 		bind:this={ref}

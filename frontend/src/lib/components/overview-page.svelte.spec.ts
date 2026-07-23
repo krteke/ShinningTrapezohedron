@@ -20,27 +20,69 @@ const snapshot: DeviceStatus = {
 	}
 };
 
+class MockEventSource {
+	static current: MockEventSource;
+
+	onopen: (() => void) | null = null;
+	onerror: (() => void) | null = null;
+	private statusListener?: (event: MessageEvent<string>) => void;
+
+	constructor(readonly url: string) {
+		MockEventSource.current = this;
+	}
+
+	addEventListener(type: string, listener: EventListener) {
+		if (type === 'status') {
+			this.statusListener = listener as (event: MessageEvent<string>) => void;
+		}
+	}
+
+	emitStatus(status: DeviceStatus) {
+		this.statusListener?.({ data: JSON.stringify(status) } as MessageEvent<string>);
+	}
+
+	close() {}
+}
+
 afterEach(() => {
 	vi.unstubAllGlobals();
 });
 
 describe('概览页面', () => {
 	it('只展示状态快照中的运行指标', async () => {
-		vi.stubGlobal(
-			'fetch',
-			vi.fn().mockResolvedValue(
-				new Response(JSON.stringify(snapshot), {
-					headers: { 'Content-Type': 'application/json' }
-				})
-			)
-		);
+		vi.stubGlobal('EventSource', MockEventSource);
 
 		render(OverviewPage);
+		MockEventSource.current.emitStatus(snapshot);
 
 		await expect.element(page.getByText('1 小时 1 分钟')).toBeInTheDocument();
 		await expect.element(page.getByText('50%')).toBeInTheDocument();
 		await expect.element(page.getByText('0.12')).toBeInTheDocument();
 		await expect.element(page.getByText('Shinning Trapezohedron')).not.toBeInTheDocument();
 		await expect.element(page.getByText(/快照/)).not.toBeInTheDocument();
+	});
+
+	it('连接中断时提示自动重连，恢复后清除提示', async () => {
+		vi.stubGlobal('EventSource', MockEventSource);
+		render(OverviewPage);
+
+		MockEventSource.current.onerror?.();
+		await expect.element(page.getByText('实时连接已中断，正在自动重连')).toBeInTheDocument();
+
+		MockEventSource.current.onopen?.();
+		await expect.element(page.getByText('实时连接已中断，正在自动重连')).not.toBeInTheDocument();
+	});
+
+	it('新实时快照会清除手动刷新错误', async () => {
+		vi.stubGlobal('EventSource', MockEventSource);
+		vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 503 })));
+		render(OverviewPage);
+		MockEventSource.current.emitStatus(snapshot);
+
+		await page.getByRole('button', { name: '刷新' }).click();
+		await expect.element(page.getByText('无法读取设备状态')).toBeInTheDocument();
+
+		MockEventSource.current.emitStatus({ ...snapshot, revision: 9 });
+		await expect.element(page.getByText('无法读取设备状态')).not.toBeInTheDocument();
 	});
 });
