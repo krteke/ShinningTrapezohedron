@@ -1,68 +1,35 @@
+mod api;
+
 use std::borrow::Cow;
 
 use axum::{
-    Json, Router,
+    Router,
     body::Body,
-    extract::State,
     http::{StatusCode, Uri, header},
     response::{IntoResponse, Response},
     routing::get,
 };
 use rust_embed::{Embed, EmbeddedFile};
-use serde::Serialize;
 use tower_http::trace::TraceLayer;
 
-use crate::status::{StatusSubscriber, model::DeviceStatus};
+use crate::{config::manager::ConfigManager, status::StatusSubscriber};
 
 #[derive(Embed)]
 #[folder = "$CARGO_MANIFEST_DIR/frontend/build/"]
 struct FrontendAssets;
 
-#[derive(Serialize)]
-struct HealthBody {
-    status: &'static str,
-}
-
-#[derive(Serialize)]
-struct ApiErrorBody {
-    code: &'static str,
-    message: &'static str,
-}
-
 #[derive(Clone)]
 struct AppState {
     status: StatusSubscriber,
+    config: ConfigManager,
 }
 
-pub fn router(status: StatusSubscriber) -> Router {
-    let api = Router::new()
-        .route("/health", get(health))
-        .route("/status", get(device_status))
-        .fallback(api_not_found);
-
+pub fn router(status: StatusSubscriber, config: ConfigManager) -> Router {
     Router::new()
-        .nest("/api", api)
+        .nest("/api", api::router())
         .fallback_service(get(frontend))
         .layer(TraceLayer::new_for_http())
-        .with_state(AppState { status })
-}
-
-async fn health() -> Json<HealthBody> {
-    Json(HealthBody { status: "ok" })
-}
-
-async fn device_status(State(state): State<AppState>) -> Json<DeviceStatus> {
-    Json(state.status.borrow().clone())
-}
-
-async fn api_not_found() -> impl IntoResponse {
-    (
-        StatusCode::NOT_FOUND,
-        Json(ApiErrorBody {
-            code: "not_found",
-            message: "接口不存在",
-        }),
-    )
+        .with_state(AppState { status, config })
 }
 
 async fn frontend(uri: Uri) -> Response {
@@ -77,10 +44,11 @@ async fn frontend(uri: Uri) -> Response {
         return asset_response(path, file);
     }
 
-    if !path.starts_with("_app/") && !path.contains('.') {
-        if let Some(index) = FrontendAssets::get("index.html") {
-            return asset_response("index.html", index);
-        }
+    if !path.starts_with("_app/")
+        && !path.contains('.')
+        && let Some(index) = FrontendAssets::get("index.html")
+    {
+        return asset_response("index.html", index);
     }
 
     StatusCode::NOT_FOUND.into_response()
@@ -109,24 +77,43 @@ fn asset_response(path: &str, file: EmbeddedFile) -> Response {
 mod tests {
     use axum::{
         body::{Body, to_bytes},
-        http::{Request, StatusCode, header},
+        http::{Method, Request, StatusCode, header},
         response::Response,
     };
     use serde_json::{Value, json};
+    use tempfile::{TempDir, tempdir};
     use tower::ServiceExt;
 
     use super::router;
-    use crate::status::{channel, model::DeviceStatus};
+    use crate::{
+        config::{manager, model::AppConfig, test_config},
+        status::{channel, model::DeviceStatus},
+    };
 
-    fn test_router() -> axum::Router {
-        let (_, subscriber) = channel(DeviceStatus::default());
-        router(subscriber)
+    fn test_router() -> (axum::Router, TempDir) {
+        test_router_with_status(DeviceStatus::default())
+    }
+
+    fn test_router_with_status(status: DeviceStatus) -> (axum::Router, TempDir) {
+        let directory = tempdir().unwrap();
+        let config = manager::spawn(directory.path().join("config.toml"), test_config(2));
+        let (_, subscriber) = channel(status);
+        (router(subscriber, config), directory)
     }
 
     async fn request(uri: &str) -> Response {
-        test_router()
-            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+        let (app, _directory) = test_router();
+        app.oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
             .await
+            .unwrap()
+    }
+
+    fn replace_request(config: &AppConfig) -> Request<Body> {
+        Request::builder()
+            .method(Method::PUT)
+            .uri("/api/config")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(serde_json::to_vec(config).unwrap()))
             .unwrap()
     }
 
@@ -149,8 +136,8 @@ mod tests {
             collected_at_unix_ms: Some(1234),
             system: None,
         };
-        let (_, subscriber) = channel(snapshot);
-        let response = router(subscriber)
+        let (app, _directory) = test_router_with_status(snapshot);
+        let response = app
             .oneshot(
                 Request::builder()
                     .uri("/api/status")
@@ -164,6 +151,97 @@ mod tests {
         assert_eq!(
             json_body(response).await,
             json!({ "revision": 7, "collectedAtUnixMs": 1234, "system": null })
+        );
+    }
+
+    #[tokio::test]
+    async fn config_returns_snapshot_and_apply_modes() {
+        let response = request("/api/config").await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            json_body(response).await,
+            json!({
+                "config": {
+                    "web": { "listen_address": "127.0.0.1:3000" },
+                    "status": { "sample_interval_seconds": 2 },
+                    "logging": { "filter": "info", "ansi": false }
+                },
+                "hotAppliedFields": ["status.sample_interval_seconds"],
+                "restartRequiredFields": [
+                    "web.listen_address", "logging.filter", "logging.ansi"
+                ]
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn config_replace_persists_candidate() {
+        let (app, directory) = test_router();
+        let candidate = test_config(5);
+        let response = app.oneshot(replace_request(&candidate)).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            json_body(response).await["config"]["status"]["sample_interval_seconds"],
+            5
+        );
+        assert_eq!(
+            AppConfig::try_load(&directory.path().join("config.toml")).unwrap(),
+            candidate
+        );
+    }
+
+    #[tokio::test]
+    async fn invalid_config_returns_json_error_without_persisting() {
+        let (app, directory) = test_router();
+        let mut candidate = test_config(5);
+        candidate.logging.filter = "info[".to_owned();
+        let response = app.oneshot(replace_request(&candidate)).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(
+            json_body(response).await,
+            json!({ "code": "invalid_config", "message": "候选配置无效" })
+        );
+        assert!(!directory.path().join("config.toml").exists());
+    }
+
+    #[tokio::test]
+    async fn persistence_failure_returns_json_error() {
+        let directory = tempdir().unwrap();
+        let config = manager::spawn(directory.path().join("missing/config.toml"), test_config(2));
+        let (_, status) = channel(DeviceStatus::default());
+        let app = router(status, config);
+        let response = app.oneshot(replace_request(&test_config(5))).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(
+            json_body(response).await,
+            json!({
+                "code": "config_persistence_failed",
+                "message": "配置保存失败"
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn malformed_config_body_returns_json_error() {
+        let (app, _directory) = test_router();
+        let request = Request::builder()
+            .method(Method::PUT)
+            .uri("/api/config")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from("{"))
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            json_body(response).await,
+            json!({
+                "code": "invalid_request",
+                "message": "请求体不是有效的完整配置"
+            })
         );
     }
 
@@ -192,6 +270,30 @@ mod tests {
         assert_eq!(
             json_body(response).await,
             json!({ "code": "not_found", "message": "接口不存在" })
+        );
+    }
+
+    #[tokio::test]
+    async fn unsupported_api_method_returns_json_405() {
+        let (app, _directory) = test_router();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+        assert_eq!(
+            json_body(response).await,
+            json!({
+                "code": "method_not_allowed",
+                "message": "HTTP 方法不受支持"
+            })
         );
     }
 

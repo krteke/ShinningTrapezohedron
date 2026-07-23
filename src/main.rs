@@ -21,13 +21,14 @@ async fn main() -> Result<()> {
     let listener = TcpListener::bind(&address)
         .await
         .with_context(|| format!("无法监听地址 {address}"))?;
+    let config_manager = config::manager::spawn(config_path, app_config);
     let (status_publisher, status_subscriber) =
         status::channel(status::model::DeviceStatus::default());
     let _status_collector =
-        status::linux::spawn_collector(status_publisher, app_config.status.sample_interval());
+        status::linux::spawn_collector(status_publisher, config_manager.subscribe());
 
     info!(%address, "Web 服务已启动");
-    axum::serve(listener, web::router(status_subscriber))
+    axum::serve(listener, web::router(status_subscriber, config_manager))
         .with_graceful_shutdown(shutdown_signal())
         .await
         .context("Web 服务异常退出")

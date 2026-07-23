@@ -3,6 +3,7 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{fs, net::SocketAddr, num::NonZeroU64, path::Path, time::Duration};
+use tracing_subscriber::EnvFilter;
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -17,7 +18,16 @@ impl AppConfig {
     pub fn try_load(path: &Path) -> Result<Self> {
         let content = fs::read_to_string(path)
             .with_context(|| format!("无法读取配置文件 {}", path.display()))?;
-        parse(&content).with_context(|| format!("配置文件 {} 格式错误", path.display()))
+        let config =
+            parse(&content).with_context(|| format!("配置文件 {} 格式错误", path.display()))?;
+        config.validate()?;
+        Ok(config)
+    }
+
+    /// 验证无法由 serde 字段类型表达的跨字段或语义约束。
+    pub fn validate(&self) -> Result<()> {
+        EnvFilter::try_new(&self.logging.filter).context("日志过滤规则无效")?;
+        Ok(())
     }
 }
 
@@ -91,5 +101,11 @@ ansi = false
     fn unknown_field_is_rejected() {
         let invalid = VALID_CONFIG.replace("ansi = false", "ansi = false\nunknown = true");
         assert!(parse(&invalid).is_err());
+    }
+
+    #[test]
+    fn invalid_log_filter_is_rejected() {
+        let config = parse(&VALID_CONFIG.replace("info", "info[")).unwrap();
+        assert!(config.validate().is_err());
     }
 }
