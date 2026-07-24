@@ -14,8 +14,8 @@ const snapshot: DeviceStatus = {
 		loadAvg: { oneMinute: 0.12, fiveMinutes: 0.34, fifteenMinutes: 0.56 },
 		memory: {
 			totalBytes: 1024 ** 3,
-			availableBytes: 512 * 1024 ** 2,
-			usedBytes: 512 * 1024 ** 2
+			availableBytes: 511.25 * 1024 ** 2,
+			usedBytes: 512.75 * 1024 ** 2
 		}
 	}
 };
@@ -49,15 +49,42 @@ afterEach(() => {
 });
 
 describe('概览页面', () => {
-	it('只展示状态快照中的运行指标', async () => {
+	it('把实时快照累积成内存和负载趋势图', async () => {
 		vi.stubGlobal('EventSource', MockEventSource);
 
 		render(OverviewPage);
 		MockEventSource.current.emitStatus(snapshot);
+		MockEventSource.current.emitStatus({
+			...snapshot,
+			revision: 9,
+			collectedAtUnixMs: snapshot.collectedAtUnixMs! + 2_000,
+			system: {
+				...snapshot.system!,
+				loadAvg: { oneMinute: 0.22, fiveMinutes: 0.4, fifteenMinutes: 0.58 }
+			}
+		});
 
-		await expect.element(page.getByText('1 小时 1 分钟')).toBeInTheDocument();
-		await expect.element(page.getByText('50%')).toBeInTheDocument();
-		await expect.element(page.getByText('0.12')).toBeInTheDocument();
+		await expect.element(page.getByText('512 MiB / 1,024 MiB · 50.1%')).toBeInTheDocument();
+		await expect
+			.element(
+				page.getByRole('img', {
+					name: /内存占用趋势，共 2 个采样点，当前 512 MiB，占 50.1%/
+				})
+			)
+			.toBeInTheDocument();
+		await expect
+			.element(page.getByRole('img', { name: /系统负载趋势，共 2 个采样点/ }))
+			.toBeInTheDocument();
+
+		const memoryChart = document.querySelector<HTMLElement>('[aria-label^="内存占用趋势"]');
+		const chartLabels = [...(memoryChart?.querySelectorAll('text') ?? [])];
+		const chartLeft = memoryChart?.getBoundingClientRect().left ?? Number.POSITIVE_INFINITY;
+		expect(chartLabels.length).toBeGreaterThan(0);
+		expect(
+			Math.min(...chartLabels.map((label) => label.getBoundingClientRect().left))
+		).toBeGreaterThan(chartLeft);
+
+		await expect.element(page.getByText('运行时间')).not.toBeInTheDocument();
 		await expect.element(page.getByText('Shinning Trapezohedron')).not.toBeInTheDocument();
 		await expect.element(page.getByText(/快照/)).not.toBeInTheDocument();
 	});
