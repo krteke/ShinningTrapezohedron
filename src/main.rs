@@ -1,4 +1,5 @@
 mod config;
+mod shutdown;
 mod status;
 mod web;
 
@@ -26,12 +27,16 @@ async fn main() -> Result<()> {
         status::channel(status::model::DeviceStatus::default());
     let _status_collector =
         status::linux::spawn_collector(status_publisher, config_manager.subscribe());
+    let shutdown = shutdown::ShutdownToken::new();
 
     info!(%address, "Web 服务已启动");
-    axum::serve(listener, web::router(status_subscriber, config_manager))
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-        .context("Web 服务异常退出")
+    axum::serve(
+        listener,
+        web::router(status_subscriber, config_manager, shutdown.clone()),
+    )
+    .with_graceful_shutdown(shutdown_signal(shutdown))
+    .await
+    .context("Web 服务异常退出")
 }
 
 fn required_config_path() -> Result<PathBuf> {
@@ -52,12 +57,13 @@ fn init_tracing(config: &config::model::LoggingConfig) -> Result<()> {
         .map_err(|error| anyhow::anyhow!("初始化日志系统失败: {error}"))
 }
 
-async fn shutdown_signal() {
+async fn shutdown_signal(shutdown: shutdown::ShutdownToken) {
     tokio::select! {
         _ = signal::ctrl_c() => {}
         _ = terminate_signal() => {}
     }
     info!("收到退出信号，正在停止 Web 服务");
+    shutdown.request();
 }
 
 #[cfg(unix)]

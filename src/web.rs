@@ -13,7 +13,7 @@ use axum::{
 use rust_embed::{Embed, EmbeddedFile};
 use tower_http::trace::TraceLayer;
 
-use crate::{config::manager::ConfigManager, status::StatusSubscriber};
+use crate::{config::manager::ConfigManager, shutdown::ShutdownToken, status::StatusSubscriber};
 
 #[derive(Embed)]
 #[folder = "$CARGO_MANIFEST_DIR/frontend/build/"]
@@ -23,14 +23,19 @@ struct FrontendAssets;
 struct AppState {
     status: StatusSubscriber,
     config: ConfigManager,
+    shutdown: ShutdownToken,
 }
 
-pub fn router(status: StatusSubscriber, config: ConfigManager) -> Router {
+pub fn router(status: StatusSubscriber, config: ConfigManager, shutdown: ShutdownToken) -> Router {
     Router::new()
         .nest("/api", api::router())
         .fallback_service(get(frontend))
         .layer(TraceLayer::new_for_http())
-        .with_state(AppState { status, config })
+        .with_state(AppState {
+            status,
+            config,
+            shutdown,
+        })
 }
 
 async fn frontend(uri: Uri) -> Response {
@@ -98,6 +103,7 @@ mod tests {
     use super::router;
     use crate::{
         config::{manager, model::AppConfig, test_config},
+        shutdown::ShutdownToken,
         status::{channel, model::DeviceStatus},
     };
 
@@ -109,7 +115,7 @@ mod tests {
         let directory = tempdir().unwrap();
         let config = manager::spawn(directory.path().join("config.toml"), test_config(2));
         let (_, subscriber) = channel(status);
-        (router(subscriber, config), directory)
+        (router(subscriber, config, ShutdownToken::new()), directory)
     }
 
     async fn request(uri: &str) -> Response {
@@ -166,7 +172,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn status_stream_publishes_current_and_new_snapshots() {
+    async fn status_stream_publishes_snapshots_and_stops_on_shutdown() {
         let directory = tempdir().unwrap();
         let config = manager::spawn(directory.path().join("config.toml"), test_config(2));
         let initial = DeviceStatus {
@@ -175,7 +181,8 @@ mod tests {
             system: None,
         };
         let (publisher, subscriber) = channel(initial);
-        let response = router(subscriber, config)
+        let shutdown = ShutdownToken::new();
+        let response = router(subscriber, config, shutdown.clone())
             .oneshot(
                 Request::builder()
                     .uri("/api/status/events")
@@ -209,6 +216,14 @@ mod tests {
         assert!(event.contains("event: status"));
         assert!(event.contains("id: 8"));
         assert!(event.contains("\"revision\":8"));
+
+        shutdown.request();
+        assert!(
+            tokio::time::timeout(Duration::from_secs(1), body.next())
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[tokio::test]
@@ -268,7 +283,7 @@ mod tests {
         let directory = tempdir().unwrap();
         let config = manager::spawn(directory.path().join("missing/config.toml"), test_config(2));
         let (_, status) = channel(DeviceStatus::default());
-        let app = router(status, config);
+        let app = router(status, config, ShutdownToken::new());
         let response = app.oneshot(replace_request(&test_config(5))).await.unwrap();
 
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
